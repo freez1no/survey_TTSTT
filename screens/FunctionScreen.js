@@ -5,22 +5,22 @@ import RecordingButton from '../components/RecordingButton';
 import { Audio } from 'expo-av';
 import axios from 'axios';
 import Logger from '../utils/Logger';
-import { API_KEY, SHEET_ID } from '@env'; // .env 파일에 실제 값 입력
+import { API_KEY, SHEET_ID } from '@env';
 import * as FileSystem from 'expo-file-system';
+const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxqGTtJZ1m6UM6UNaQWOBc8YBaFrC_NqaJ8aXVoMOe4Gt1uA37uHa3yoAxuB5VUg-be/exec';
 
 export default function FunctionScreen({ navigation }) {
   const [surveyData, setSurveyData] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0); // 현재 진행중인 질문의 인덱스 (0부터 시작)
+  const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showAnswerButton, setShowAnswerButton] = useState(false);
   const [sound, setSound] = useState(null);
   const [recordedUri, setRecordedUri] = useState(null);
 
-  // 스프레드시트 A열 데이터를 불러오는 함수
+  // 스프레드시트 데이터 로딩
   const loadSurveyData = async () => {
     try {
-      // A열의 데이터를 A1부터 빈 셀이 나오기 전까지 불러옴
-      const range = 'Sheet1!A1:A';
+      const range = 'Sheet1!A1:A'; //범위
       const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?key=${API_KEY}`;
       Logger.log(`Fetching survey data from: ${url}`);
 
@@ -28,7 +28,6 @@ export default function FunctionScreen({ navigation }) {
       Logger.log(response.data);
 
       if (response.data && response.data.values && response.data.values.length > 0) {
-        // 반환 데이터가 [[question1], [question2], ...] 형태이므로 flatten 처리
         const questions = response.data.values.map(row => row[0]);
         setSurveyData(questions);
       } else {
@@ -40,14 +39,14 @@ export default function FunctionScreen({ navigation }) {
     }
   };
 
-  // TTS API를 호출하여 질문 텍스트를 음성 재생하는 함수
+  // TTS
   const handleStart = async () => {
     if (surveyData.length === 0) {
       Alert.alert('먼저 데이터를 불러와야 합니다.');
       return;
     }
     if (currentIndex >= surveyData.length) {
-      Alert.alert('모든 설문조사가 완료되었습니다.');
+      Alert.alert('모든 응답이 완료되었습니다.');
       return;
     }
     const questionText = surveyData[currentIndex];
@@ -56,7 +55,6 @@ export default function FunctionScreen({ navigation }) {
     try {
       setIsPlaying(true);
       setShowAnswerButton(false);
-      // Google TTS API 호출 (텍스트를 음성으로 변환)
       const ttsUrl = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${API_KEY}`;
       const ttsRequestData = {
         input: { text: questionText },
@@ -67,9 +65,7 @@ export default function FunctionScreen({ navigation }) {
       const ttsResponse = await axios.post(ttsUrl, ttsRequestData);
       Logger.log(ttsResponse.data);
 
-      // TTS API가 base64 인코딩된 MP3 데이터를 반환한다고 가정
       const base64Audio = ttsResponse.data.audioContent;
-      // expo-av에서 재생할 수 있도록 data URI scheme으로 변환
       const audioUri = `data:audio/mp3;base64,${base64Audio}`;
 
       const { sound } = await Audio.Sound.createAsync({ uri: audioUri });
@@ -88,21 +84,18 @@ export default function FunctionScreen({ navigation }) {
     }
   };
 
-  // 녹음 완료 후 STT API 호출 및 Sheets 업데이트 함수
+  // STT & 업데이트 시트
   const onRecordingComplete = async (uri) => {
     Logger.log(`Recording complete: ${uri}`);
     setRecordedUri(uri);
     try {
-      // expo-file-system을 사용하여 녹음 파일을 base64 문자열로 변환 (정적 import 사용)
       const base64Audio = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
       Logger.log(`Audio converted to base64: ${base64Audio.substring(0, 100)}...`);
-
-      // STT API 호출
       const sttUrl = `https://speech.googleapis.com/v1/speech:recognize?key=${API_KEY}`;
       const sttRequestData = {
         config: {
-          encoding: 'AMR', // 녹음 포맷에 맞게 조정
-          sampleRateHertz: 8000, // 필요에 따라 수정
+          encoding: 'AMR',            // Android 기본 3gp 녹음은 AMR (Narrowband)
+          sampleRateHertz: 8000,       // 기본 AMR 녹음 샘플레이트
           languageCode: 'ko-KR'
         },
         audio: {
@@ -112,16 +105,15 @@ export default function FunctionScreen({ navigation }) {
 
       const sttResponse = await axios.post(sttUrl, sttRequestData);
       Logger.log(sttResponse.data);
-      // 전사된 텍스트 추출
+
       const transcript =
         sttResponse.data.results && sttResponse.data.results.length > 0
           ? sttResponse.data.results[0].alternatives[0].transcript
           : '';
 
-      // 전사 텍스트를 Sheets의 B열에 업데이트
+      // Google Apps Script 웹 앱을 통해 스프레드시트 업데이트
       await updateSheetWithTranscript(transcript);
 
-      // 다음 질문으로 이동
       setCurrentIndex(currentIndex + 1);
       setShowAnswerButton(false);
     } catch (error) {
@@ -130,21 +122,18 @@ export default function FunctionScreen({ navigation }) {
     }
   };
 
-  // Sheets API를 호출하여 전사 텍스트를 B열에 업데이트하는 함수
+  // Google Apps Script 웹 앱을 호출하여 스프레드시트의 B열에 전사 텍스트 업데이트
   const updateSheetWithTranscript = async (transcript) => {
     try {
       const rowNumber = currentIndex + 1; // 스프레드시트 행 번호는 1부터 시작
-      const range = `Sheet1!B${rowNumber}`;
-      const url = `https://sheets.googleapis.com/v4/spreadsheets/${SHEET_ID}/values/${range}?valueInputOption=USER_ENTERED&key=${API_KEY}`;
-      const updateData = {
-        range: range,
-        majorDimension: "ROWS",
-        values: [[transcript]]
+      const payload = {
+        row: rowNumber,
+        transcript: transcript
       };
-      Logger.log(`Updating sheet at range ${range} with transcript: ${transcript}`);
+      Logger.log(`Updating sheet via Apps Script at row ${rowNumber} with transcript: ${transcript}`);
 
-      const updateResponse = await axios.put(url, updateData);
-      Logger.log(updateResponse.data);
+      const response = await axios.post(APPS_SCRIPT_URL, payload);
+      Logger.log(response.data);
     } catch (error) {
       Logger.log(error);
       Alert.alert('Sheets 업데이트 오류 발생!');
@@ -168,7 +157,6 @@ export default function FunctionScreen({ navigation }) {
           <Text style={styles.buttonText}>로그</Text>
         </TouchableOpacity>
       </View>
-      {/* 음성 재생 중 화면을 어둡게 처리 */}
       <Modal transparent={true} visible={isPlaying}>
         <View style={styles.modalOverlay}>
           <ActivityIndicator size="large" color="#fff" />

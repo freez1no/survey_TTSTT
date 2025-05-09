@@ -1,5 +1,5 @@
-// screens/FunctionScreen.js
-import React, { useState, useEffect } from 'react';
+// FunctionScreen.js
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -11,14 +11,15 @@ import {
 } from 'react-native';
 import SurveyTable from '../components/SurveyTable';
 import RecordingButton from '../components/RecordingButton';
+import * as FileSystem from 'expo-file-system';
 import { Audio } from 'expo-av';
 import axios from 'axios';
 import Logger from '../utils/Logger';
-import * as FileSystem from 'expo-file-system';
+import { fetchZonosTTS } from '../utils/ZonosService';
 import { API_KEY, SHEET_ID } from '@env';
-import { synthesizeTTS } from '../utils/ZonosService';
 
-const APPS_SCRIPT_URL = 'https://script.google.com/macros/s/……/exec';
+const APPS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfy.../exec';
 
 export default function FunctionScreen({ navigation }) {
   const [surveyData, setSurveyData] = useState([]);
@@ -27,7 +28,6 @@ export default function FunctionScreen({ navigation }) {
   const [showAnswerButton, setShowAnswerButton] = useState(false);
   const [sound, setSound] = useState(null);
 
-  // 1) 구글 시트에서 설문 데이터 불러오기
   const loadSurveyData = async () => {
     try {
       const range = 'Sheet1!A1:A';
@@ -43,10 +43,9 @@ export default function FunctionScreen({ navigation }) {
     }
   };
 
-  // 2) Zonos TTS 서버 호출 및 재생
   const handleStart = async () => {
-    if (surveyData.length === 0) {
-      Alert.alert('먼저 데이터를 불러와야 합니다.');
+    if (!surveyData.length) {
+      Alert.alert('먼저 “데이터 불러오기”를 눌러주세요.');
       return;
     }
     if (currentIndex >= surveyData.length) {
@@ -55,23 +54,25 @@ export default function FunctionScreen({ navigation }) {
     }
 
     const questionText = surveyData[currentIndex];
-    Logger.log(`TTS 요청 텍스트: ${questionText}`);
+    Logger.log(`제로샷 TTS 텍스트: ${questionText}`);
 
     try {
       setIsPlaying(true);
       setShowAnswerButton(false);
 
-      // Zonos 서버로부터 data URI 형태의 WAV 얻기
-      const audioUri = await synthesizeTTS(questionText);
-      Logger.log(`받은 오디오 URI 예시: ${audioUri.slice(0, 80)}...`);
+      // Zonos TTS 호출
+      const wavUri = await fetchZonosTTS(questionText);
+      Logger.log(`받은 WAV URI 예시: ${wavUri.slice(0, 80)}...`);
 
-      // Expo-AV로 재생
-      const { sound: newSound } = await Audio.Sound.createAsync({ uri: audioUri });
+      // Expo-AV로 재생 및 재생 종료 감지
+      const { sound: newSound } = await Audio.Sound.createAsync({ uri: wavUri });
       setSound(newSound);
       newSound.setOnPlaybackStatusUpdate(status => {
         if (status.didJustFinish) {
+          // 재생 종료 시 overlay 숨기고 녹음 버튼 표시
           setIsPlaying(false);
           setShowAnswerButton(true);
+          newSound.unloadAsync();
         }
       });
       await newSound.playAsync();
@@ -82,23 +83,13 @@ export default function FunctionScreen({ navigation }) {
     }
   };
 
-  // 컴포넌트 언마운트 시 사운드 해제
-  useEffect(() => {
-    return () => {
-      if (sound) {
-        sound.unloadAsync();
-      }
-    };
-  }, [sound]);
-
-  // 3) 녹음 완료 후 STT 및 시트 업데이트 (기존 로직 유지)
   const onRecordingComplete = async uri => {
-    Logger.log(`녹음 URI: ${uri}`);
+    Logger.log(`녹음 완료: ${uri}`);
     try {
       const base64 = await FileSystem.readAsStringAsync(uri, {
         encoding: FileSystem.EncodingType.Base64
       });
-      Logger.log(`Base64 길이: ${base64.length}`);
+      Logger.log(`Base64 length: ${base64.length}`);
 
       const sttUrl = `https://speech.googleapis.com/v1/speech:recognize?key=${API_KEY}`;
       const sttReq = {
@@ -109,13 +100,12 @@ export default function FunctionScreen({ navigation }) {
       const transcript = sttRes.data.results?.[0]?.alternatives?.[0]?.transcript || '';
       Logger.log(`STT 결과: ${transcript}`);
 
-      // Google Apps Script로 시트 업데이트
       await axios.post(APPS_SCRIPT_URL, {
         row: currentIndex + 1,
         transcript
       });
 
-      setCurrentIndex(idx => idx + 1);
+      setCurrentIndex(ci => ci + 1);
       setShowAnswerButton(false);
     } catch (err) {
       Logger.log(err);
@@ -141,11 +131,11 @@ export default function FunctionScreen({ navigation }) {
           onPress={handleStart}
           disabled={isPlaying}
         >
-          <Text style={styles.btnText}>시작</Text>
+          <Text style={styles.btnText}>시작 (제로샷)</Text>
         </TouchableOpacity>
 
         {showAnswerButton && (
-          <RecordingButton onRecordingComplete={onRecordingComplete} />
+          <RecordingButton onComplete={onRecordingComplete} />
         )}
 
         <TouchableOpacity
@@ -160,7 +150,7 @@ export default function FunctionScreen({ navigation }) {
       <Modal transparent visible={isPlaying}>
         <View style={styles.overlay}>
           <ActivityIndicator size="large" color="#fff" />
-          <Text style={styles.overlayText}>음성 재생 중…</Text>
+          <Text style={styles.overlayText}>음성 재생 중...</Text>
         </View>
       </Modal>
     </View>

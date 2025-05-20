@@ -9,21 +9,45 @@ export default function RecordingButton({ onRecordingComplete }) {
   const startRecording = async () => {
     try {
       const permission = await Audio.requestPermissionsAsync();
-      if(permission.status !== 'granted'){
+      if (permission.status !== 'granted') {
         Alert.alert('오디오 녹음 권한이 필요합니다.');
         return;
       }
+
       setIsRecording(true);
+
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
+
       const recording = new Audio.Recording();
-      await recording.prepareToRecordAsync(Audio.RECORDING_OPTIONS_PRESET_HIGH_QUALITY);
+
+      await recording.prepareToRecordAsync({
+        android: {
+          extension: '.wav',
+          outputFormat: Audio.RECORDING_OPTION_ANDROID_OUTPUT_FORMAT_PCM_16BIT,
+          audioEncoder: Audio.RECORDING_OPTION_ANDROID_AUDIO_ENCODER_PCM_16BIT,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+        },
+        ios: {
+          extension: '.wav',
+          audioQuality: Audio.RECORDING_OPTION_IOS_AUDIO_QUALITY_MAX,
+          sampleRate: 16000,
+          numberOfChannels: 1,
+          linearPCMBitDepth: 16,
+          linearPCMIsBigEndian: false,
+          linearPCMIsFloat: false,
+        },
+        isMeteringEnabled: true,
+      });
+
       await recording.startAsync();
       setRecording(recording);
     } catch (error) {
       console.error('녹음 시작 실패', error);
+      Alert.alert('녹음 시작 실패', error.message || String(error));
     }
   };
 
@@ -32,10 +56,15 @@ export default function RecordingButton({ onRecordingComplete }) {
       setIsRecording(false);
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
-      onRecordingComplete(uri);
+      if (onRecordingComplete) {
+        onRecordingComplete(uri);
+      } else {
+        console.warn('onRecordingComplete 콜백이 정의되지 않음');
+      }
       setRecording(null);
     } catch (error) {
       console.error('녹음 중지 실패', error);
+      Alert.alert('녹음 중지 실패', error.message || String(error));
     }
   };
 
@@ -55,11 +84,11 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    justifyContent:'center',
-    alignItems:'center',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  buttonText:{
-    color:'#fff',
-    textAlign:'center'
-  }
+  buttonText: {
+    color: '#fff',
+    textAlign: 'center',
+  },
 });

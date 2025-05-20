@@ -1,4 +1,3 @@
-// FunctionScreen.js
 import React, { useState } from 'react';
 import {
   View,
@@ -16,10 +15,9 @@ import { Audio } from 'expo-av';
 import axios from 'axios';
 import Logger from '../utils/Logger';
 import { fetchZonosTTS } from '../utils/ZonosService';
-import { API_KEY, SHEET_ID } from '@env';
+import { API_KEY, SHEET_ID, APPS_SCRIPT_URL } from '@env';
+import { transcribeAudio } from '../utils/Whisper';
 
-const APPS_SCRIPT_URL =
-  'https://script.google.com/macros/s/AKfy.../exec';
 
 export default function FunctionScreen({ navigation }) {
   const [surveyData, setSurveyData] = useState([]);
@@ -60,16 +58,13 @@ export default function FunctionScreen({ navigation }) {
       setIsPlaying(true);
       setShowAnswerButton(false);
 
-      // Zonos TTS 호출
       const wavUri = await fetchZonosTTS(questionText);
       Logger.log(`받은 WAV URI 예시: ${wavUri.slice(0, 80)}...`);
 
-      // Expo-AV로 재생 및 재생 종료 감지
       const { sound: newSound } = await Audio.Sound.createAsync({ uri: wavUri });
       setSound(newSound);
       newSound.setOnPlaybackStatusUpdate(status => {
         if (status.didJustFinish) {
-          // 재생 종료 시 overlay 숨기고 녹음 버튼 표시
           setIsPlaying(false);
           setShowAnswerButton(true);
           newSound.unloadAsync();
@@ -86,19 +81,8 @@ export default function FunctionScreen({ navigation }) {
   const onRecordingComplete = async uri => {
     Logger.log(`녹음 완료: ${uri}`);
     try {
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64
-      });
-      Logger.log(`Base64 length: ${base64.length}`);
-
-      const sttUrl = `https://speech.googleapis.com/v1/speech:recognize?key=${API_KEY}`;
-      const sttReq = {
-        config: { encoding: 'AMR', sampleRateHertz: 8000, languageCode: 'ko-KR' },
-        audio: { content: base64 }
-      };
-      const sttRes = await axios.post(sttUrl, sttReq);
-      const transcript = sttRes.data.results?.[0]?.alternatives?.[0]?.transcript || '';
-      Logger.log(`STT 결과: ${transcript}`);
+      const transcript = await transcribeAudio(uri);
+      Logger.log(`WhisperX STT 결과: ${transcript}`);
 
       await axios.post(APPS_SCRIPT_URL, {
         row: currentIndex + 1,
@@ -135,7 +119,7 @@ export default function FunctionScreen({ navigation }) {
         </TouchableOpacity>
 
         {showAnswerButton && (
-          <RecordingButton onComplete={onRecordingComplete} />
+          <RecordingButton onRecordingComplete={onRecordingComplete} />
         )}
 
         <TouchableOpacity
